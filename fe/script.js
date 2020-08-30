@@ -1,4 +1,4 @@
-loginButton = () => {
+loginButton = (onClick) => {
   let e = document.createElement('input');
   e.type = 'button';
   e.value = 'Log in';
@@ -12,6 +12,7 @@ loginButton = () => {
         password: document.getElementById('password').value,
       }),
     })
+    onClick();
   });
   return e;
 }
@@ -35,7 +36,14 @@ passwordInput = () => {
   return e;
 }
 
-async function loginPage() {
+
+function background() {
+  document.body.style = `
+     background-color: #333333;
+  `;
+}
+
+function loginPage(afterLogin) {
   let classStyles = document.createElement('style');
   classStyles.innerHTML = `
     .cell {
@@ -44,10 +52,6 @@ async function loginPage() {
     }
   `;
   document.head.appendChild(classStyles);
-
-  document.body.style = `
-     background-color: #333333;
-  `;
 
   let div = document.createElement('div');
   div.style = `
@@ -59,8 +63,40 @@ async function loginPage() {
   `;
   div.appendChild(userNameInput())
   div.appendChild(passwordInput());
-  div.appendChild(loginButton());
+  div.appendChild(loginButton(() => {
+    div.remove();
+    classStyles.remove();
+    afterLogin();
+  }));
   document.body.appendChild(div);
 };
 
-loginPage();
+function welcomePage() {
+  e = document.createElement('h1')
+  e.innerHTML = 'Welcome!';
+  document.body.appendChild(e)
+}
+
+let accessToken = undefined;
+
+async function fetchAccessToken() {
+  res = await fetch('api/refresh', {
+    method: 'POST'
+  });
+  if (res.ok) {
+    accessToken = (await res.json())['access_token']
+  }
+}
+
+async function app() {
+  background();
+  await fetchAccessToken();
+  if (!accessToken) {
+    loginPage(welcomePage);
+  }
+  else {
+    welcomePage();
+  }
+}
+
+app();
