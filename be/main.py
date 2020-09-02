@@ -21,7 +21,7 @@ def access_token(user_id):
 
 def refresh(env, start_response):
     try:
-        refresh_token = SimpleCookie(env.get('HTTP_COOKIE')).get('refresh_token')
+        refresh_token = SimpleCookie(env['HTTP_COOKIE']).get('refresh_token')
         if refresh_token:
             data = jwt.decode(refresh_token.value, JWT_SECRET, algorithm='HS256',
                               options={'require': ['exp', 'aud']},
@@ -34,9 +34,7 @@ def refresh(env, start_response):
             }).encode()]
     except jwt.PyJWTError:
         pass
-    start_response('403 Forbidden', [
-        ('Content-Type','text/html'),
-    ])
+    start_response('403 Forbidden')
     return []
 
 
@@ -64,16 +62,12 @@ def login(env, start_response):
             'access_token': access_token(user_id),
         }).encode()]
 
-    start_response('403 Forbidden', [
-        ('Content-Type','text/html'),
-    ])
+    start_response('403 Forbidden')
     return []
 
 
 def unknown(env, start_response):
-    start_response('404 Not Found', [
-        ('Content-Type','text/html'),
-    ])
+    start_response('404 Not Found')
     return []
 
 handlers = {
@@ -83,4 +77,8 @@ handlers = {
 
 def application(env, start_response):
     handler = handlers.get(env['PATH_INFO'], unknown)
-    return handler(env, start_response)
+    try:
+        return handler(env, start_response)
+    except Exception:
+        start_response('500 Internal Server Error')
+        return []
