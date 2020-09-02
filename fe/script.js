@@ -4,16 +4,7 @@ loginButton = (onClick) => {
   e.value = 'Log in';
   e.style.gridRow = 3;
   e.className = 'cell';
-  e.addEventListener('click', async () => {
-    await fetch("api/login", {
-      method: 'POST',
-      body: JSON.stringify({
-        username: document.getElementById('username').value,
-        password: document.getElementById('password').value,
-      }),
-    })
-    onClick();
-  });
+  e.addEventListener('click', onClick)
   return e;
 }
 
@@ -26,13 +17,19 @@ userNameInput = () => {
   return e;
 }
 
-passwordInput = () => {
+passwordInput = onEnter => {
   let e = document.createElement('input');
   e.id = 'password'
   e.type = 'password';
   e.placeholder = 'Password';
   e.style.gridRow = 2;
   e.className = 'cell';
+  e.addEventListener('keyup', event => {
+    if (event.keyCode == 13) {
+      event.preventDefault();
+      onEnter();
+    }
+  });
   return e;
 }
 
@@ -41,6 +38,17 @@ function background() {
   document.body.style = `
      background-color: #333333;
   `;
+}
+
+async function login() {
+  res = await fetch("api/login", {
+    method: 'POST',
+    body: JSON.stringify({
+      username: document.getElementById('username').value,
+      password: document.getElementById('password').value,
+    }),
+  });
+  return res.ok;
 }
 
 function loginPage(afterLogin) {
@@ -61,13 +69,18 @@ function loginPage(afterLogin) {
     transform: translate(-50%, -50%);
     display: grid;
   `;
+
+  function tryLogin() {
+    if (login()) {
+      div.remove();
+      classStyles.remove();
+      afterLogin();
+    }
+  }
+
   div.appendChild(userNameInput())
-  div.appendChild(passwordInput());
-  div.appendChild(loginButton(() => {
-    div.remove();
-    classStyles.remove();
-    afterLogin();
-  }));
+  div.appendChild(passwordInput(tryLogin));
+  div.appendChild(loginButton(tryLogin));
   document.body.appendChild(div);
 };
 

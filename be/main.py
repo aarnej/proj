@@ -15,6 +15,7 @@ def access_token(user_id):
     return jwt.encode({
         'user_id': user_id,
         'exp': datetime.now(timezone.utc) + timedelta(minutes=3),
+        'aud': 'urn:access',
     }, JWT_SECRET, algorithm='HS256').decode()
 
 
@@ -22,7 +23,9 @@ def refresh(env, start_response):
     try:
         refresh_token = SimpleCookie(env.get('HTTP_COOKIE')).get('refresh_token')
         if refresh_token:
-            data = jwt.decode(refresh_token.value, JWT_SECRET, algorithm='HS256')
+            data = jwt.decode(refresh_token.value, JWT_SECRET, algorithm='HS256',
+                              options={'require': ['exp', 'aud']},
+                              audience='urn:refresh')
             start_response('200 OK', [
                 ('Content-Type','application/json'),
             ])
@@ -39,18 +42,18 @@ def refresh(env, start_response):
 
 def login(env, start_response):
     payload = json.load(env['wsgi.input'])
-    cursor = connection.cursor()
-    cursor.execute(
-        'select id from users where username = %s and password = crypt(%s, password);',
-        (payload['username'], payload['password'])
-    )
-    (user_id,) = cursor.fetchone() or (None,)
-    cursor.close()
+    with connection, connection.cursor() as cursor:
+        cursor.execute(
+            'select id from users where username = %s and password = crypt(%s, password);',
+            (payload['username'], payload['password'])
+        )
+        (user_id,) = cursor.fetchone() or (None,)
 
     if user_id:
         refresh_token = jwt.encode({
             'user_id': user_id,
             'exp': datetime.now(timezone.utc) + timedelta(hours=3),
+            'aud': 'urn:refresh',
         }, JWT_SECRET, algorithm='HS256').decode()
 
         start_response('200 OK', [
