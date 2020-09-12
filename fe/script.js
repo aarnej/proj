@@ -1,49 +1,15 @@
-let accessToken = undefined;
+var accessToken;
+var contentDiv;
+var logoutButton;
 
-loginButton = (onClick) => {
-  let e = document.createElement('input');
-  e.type = 'button';
-  e.value = 'Log in';
-  e.style.gridRow = 3;
-  e.className = 'cell-input';
-  e.addEventListener('click', onClick)
-  return e;
-}
-
-userNameInput = () => {
-  let e = document.createElement('input');
-  e.id = 'username'
-  e.placeholder = 'Username';
-  e.style.gridRow = 1;
-  e.className = 'cell-input';
-  return e;
-}
-
-passwordInput = onEnter => {
-  let e = document.createElement('input');
-  e.id = 'password'
-  e.type = 'password';
-  e.placeholder = 'Password';
-  e.style.gridRow = 2;
-  e.className = 'cell-input';
-  e.addEventListener('keyup', event => {
-    if (event.keyCode == 13) {
-      event.preventDefault();
-      onEnter();
-    }
-  });
-  return e;
-}
-
-
-function background() {
+function startup() {
   document.body.style = `
      background-color: #333333;
   `;
 
   let classStyles = document.createElement('style');
   classStyles.innerHTML = `
-    .cell-input, .cell-quiz {
+    .cell-input, .cell-quiz, .logout {
       font-size: 3em;
       background-color: inherit;
     }
@@ -65,22 +31,26 @@ function background() {
       flex-wrap: wrap;
       justify-content: center;
     }
+    .logout {
+      position: fixed;
+      right: 0px;
+      top: 0px;
+    }
   `;
   document.head.appendChild(classStyles);
-}
 
-async function login() {
-  res = await fetch("/api/login", {
-    method: 'POST',
-    body: JSON.stringify({
-      username: document.getElementById('username').value,
-      password: document.getElementById('password').value,
-    }),
+  logoutButton = document.createElement('input');
+  logoutButton.type = 'button';
+  logoutButton.value = 'Sign out';
+  logoutButton.className = 'logout';
+  logoutButton.addEventListener('click', () => {
+    accessToken = 'logout';
+    navigate(routes.login);
   });
-  if (res.ok) {
-    accessToken = (await res.json())['access_token'];
-  }
-  return res.ok;
+
+  contentDiv = document.createElement('div');
+  document.body.appendChild(contentDiv);
+  document.body.appendChild(logoutButton);
 }
 
 async function myFetch(url, params) {
@@ -88,7 +58,7 @@ async function myFetch(url, params) {
     ...params,
     headers: {
       ...(params && params.headers),
-      'Access-Token': accessToken,
+      'Authorization': `Bearer ${accessToken}`,
     },
   };
 
@@ -107,13 +77,70 @@ async function myFetch(url, params) {
 async function loginPage() {
   function nextPage() {
     navigate(
-      findRoute(new URLSearchParams(window.location.search).get('return')) ||
-      routes.menu);
+      findRoute(new URLSearchParams(window.location.search).get('return'))
+    );
   }
 
   if (await fetchAccessToken()) {
     nextPage();
     return;
+  }
+
+  function loginButton(onClick) {
+    let e = document.createElement('input');
+    e.type = 'button';
+    e.value = 'Log in';
+    e.style.gridRow = 3;
+    e.className = 'cell-input';
+    e.addEventListener('click', onClick)
+    return e;
+  }
+
+  function enterHandler(onEnter) {
+    function eventHandler(event) {
+      if (event.keyCode == 13) {
+        event.preventDefault();
+        onEnter();
+      }
+    }
+    return eventHandler;
+  }
+
+  function userNameInput(onEnter) {
+    let e = document.createElement('input');
+    e.id = 'username'
+    e.placeholder = 'Username';
+    e.style.gridRow = 1;
+    e.className = 'cell-input';
+    e.autocomplete = 'username';
+    e.addEventListener('keyup', enterHandler(onEnter));
+    return e;
+  }
+
+  function passwordInput(onEnter) {
+    let e = document.createElement('input');
+    e.id = 'password'
+    e.type = 'password';
+    e.placeholder = 'Password';
+    e.style.gridRow = 2;
+    e.className = 'cell-input';
+    e.autocomplete = 'current-password';
+    e.addEventListener('keyup', enterHandler(onEnter));
+    return e;
+  }
+
+  async function login() {
+    res = await fetch("/api/login/", {
+      method: 'POST',
+      body: JSON.stringify({
+        username: document.getElementById('username').value,
+        password: document.getElementById('password').value,
+      }),
+    });
+    if (res.ok) {
+      accessToken = (await res.json())['access_token'];
+    }
+    return res.ok;
   }
 
   let div = document.createElement('div');
@@ -126,14 +153,18 @@ async function loginPage() {
     }
   }
 
-  div.appendChild(userNameInput())
-  div.appendChild(passwordInput(tryLogin));
-  div.appendChild(loginButton(tryLogin));
-  document.body.appendChild(div);
+  form = document.createElement('form');
+  div.appendChild(form)
+
+  form.appendChild(userNameInput(tryLogin))
+  form.appendChild(passwordInput(tryLogin));
+  form.appendChild(loginButton(tryLogin));
+
+  contentDiv.appendChild(div);
 };
 
 async function wordQuiz() {
-  res = await myFetch('/api/quiz');
+  res = await myFetch('/api/quiz/');
   if (res.ok) {
     let div = document.createElement('div');
     div.className = 'center-grid';
@@ -155,7 +186,7 @@ async function wordQuiz() {
       div.appendChild(input);
     });
 
-    document.body.appendChild(div);
+    contentDiv.appendChild(div);
   }
 }
 
@@ -182,14 +213,22 @@ async function menu() {
 
   buttons.forEach(button => div.appendChild(button));
 
-  document.body.appendChild(div);
+  contentDiv.appendChild(div);
 }
 
 async function fetchAccessToken() {
-  res = await fetch('/api/refresh', {
+  let search = new URLSearchParams();
+  if (accessToken == 'logout')
+    search.append('logout', 1);
+  res = await fetch('/api/refresh/?' + search.toString(), {
     method: 'POST',
   });
   if (res.ok) {
+    if (accessToken == 'logout') {
+      accessToken = undefined;
+      return false;
+    }
+
     accessToken = (await res.json())['access_token'];
   }
   return res.ok;
@@ -218,6 +257,8 @@ function findRoute(pathname) {
 }
 
 async function navigate(route, searchParam) {
+  if (!route)
+    route = routes.menu;
   const newUrl = new URL(window.location.href);
   newUrl.pathname = route.pathname;
   if (searchParam)
@@ -225,17 +266,17 @@ async function navigate(route, searchParam) {
   else
     newUrl.search = '';;
   history.pushState(undefined, route.title, newUrl.toString());
-  for (child of document.body.children)
+  for (child of contentDiv.children)
     if (!(child instanceof HTMLScriptElement))
       child.remove()
   route.handler()
 }
 
 async function app() {
-  background();
+  startup();
   navigate(routes.login, ['return', window.location.pathname]);
   window.onpopstate = () => {
-    navigate(findRoute(window.location.pathname) || routes.menu);
+    navigate(findRoute(window.location.pathname));
   };
 }
 

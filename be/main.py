@@ -1,3 +1,4 @@
+from urllib.parse import parse_qs
 from http.cookies import SimpleCookie
 import psycopg2
 import jwt
@@ -21,11 +22,20 @@ def access_token(user_id):
 
 def refresh(env, start_response):
     try:
-        refresh_token = SimpleCookie(env['HTTP_COOKIE']).get('refresh_token')
+        refresh_token = SimpleCookie(env.get('HTTP_COOKIE')).get('refresh_token')
         if refresh_token:
             data = jwt.decode(refresh_token.value, JWT_SECRET, algorithm='HS256',
                               options={'require': ['exp', 'aud']},
                               audience='urn:refresh')
+
+            if parse_qs(env.get('QUERY_STRING')).get('logout'):
+                start_response('200 OK', [
+                    ('Set-Cookie',
+                     'refresh_token=; Max-Age=0; Secure; '
+                     'HttpOnly; SameSite=Strict; Path=/api'),
+                ])
+                return []
+
             start_response('200 OK', [
                 ('Content-Type','application/json'),
             ])
@@ -38,14 +48,22 @@ def refresh(env, start_response):
     return unauthorized(env, start_response)
 
 
-def authorized(env):
+def auth_ok(env):
     try:
-        jwt.decode(env.get('HTTP_ACCESS_TOKEN'), JWT_SECRET, algorithm='HS256',
+        token = env['HTTP_AUTHORIZATION'].split()[-1]
+    except (IndexError, KeyError):
+        return False
+
+    try:
+        jwt.decode(token,
+                   JWT_SECRET,
+                   algorithm='HS256',
                    options={'require': ['exp', 'aud']},
                    audience='urn:access')
-        return True
     except jwt.PyJWTError:
         return False
+
+    return True
 
 
 def login(env, start_response):
@@ -66,7 +84,8 @@ def login(env, start_response):
 
         start_response('200 OK', [
             ('Content-Type','application/json'),
-            ('Set-Cookie', f'refresh_token={refresh_token}; Secure; HttpOnly; SameSite=strict'),
+            ('Set-Cookie', f'refresh_token={refresh_token}; Secure; '
+             f'HttpOnly; SameSite=Strict; Path=/api'),
         ])
         return [json.dumps({
             'access_token': access_token(user_id),
@@ -101,15 +120,15 @@ def quiz(env, start_response):
 
 
 endpoints = {
-    '/login': {
+    '/login/': {
         'handler': login,
-        'authorize': False,
+        'check_auth': False,
     },
-    '/refresh': {
+    '/refresh/': {
         'handler': refresh,
-        'authorize': False,
+        'check_auth': False,
     },
-    '/quiz': {
+    '/quiz/': {
         'handler': quiz,
     }
 }
@@ -120,7 +139,7 @@ def application(env, start_response):
             'handler': unknown,
         })
 
-        if endpoint.get('authorize', True) and not authorized(env):
+        if endpoint.get('check_auth', True) and not auth_ok(env):
             return unauthorized(env, start_response)
 
         return endpoint['handler'](env, start_response)
