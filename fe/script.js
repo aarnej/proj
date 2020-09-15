@@ -2,6 +2,8 @@ var accessToken;
 var contentDiv;
 var logoutButton;
 
+let pathMatcher = new RegExp('[^/]*$')
+
 function startup() {
   document.body.style = `
      background-color: #333333;
@@ -45,7 +47,7 @@ function startup() {
   logoutButton.className = 'logout';
   logoutButton.addEventListener('click', () => {
     accessToken = 'logout';
-    navigate(routes.login);
+    navigate(routes.login.pathname);
   });
 
   contentDiv = document.createElement('div');
@@ -54,11 +56,15 @@ function startup() {
 }
 
 async function myFetch(url, params) {
+  function auth(token) {
+    return `Bearer ${token}`;
+  }
+
   const fetchParams = {
     ...params,
     headers: {
       ...(params && params.headers),
-      'Authorization': `Bearer ${accessToken}`,
+      Authorization: auth(accessToken),
     },
   };
 
@@ -68,16 +74,23 @@ async function myFetch(url, params) {
       return res
   }
   if (await fetchAccessToken()) {
+    fetchParams.headers.Authorization = auth(accessToken);
     return await fetch(url, fetchParams);
   }
-  navigate(routes.login, ['return', window.location.pathname]);
+  const searchParams = new URLSearchParams();
+  searchParams.append('return', window.location.pathname);
+  navigate(routes.login.pathname, {
+    replaceState: true,
+    search: searchParams.toString(),
+  });
   throw Error('must relogin');
 }
 
 async function loginPage() {
   function nextPage() {
     navigate(
-      findRoute(new URLSearchParams(window.location.search).get('return'))
+      new URLSearchParams(window.location.search).get('return'),
+      { replaceState: true },
     );
   }
 
@@ -164,13 +177,21 @@ async function loginPage() {
 };
 
 async function wordQuiz() {
-  res = await myFetch('/api/quiz/');
+  const url = new URL(window.location.href);
+  const match = url.pathname.match('[^/]*$');
+  const date = match && match[0];
+  let search = new URLSearchParams();
+  if (date)
+    search.append('date', date);
+
+  res = await myFetch('/api/quiz/?' + search.toString());
   if (res.ok) {
+    let json = await res.json()
+
     let div = document.createElement('div');
     div.className = 'center-grid';
 
-    let json = await res.json()
-    json.forEach((entry, index) => {
+    json.word_pairs.forEach((entry, index) => {
       let span = document.createElement('span');
       span.className = 'cell-quiz';
       span.style.gridRow = index;
@@ -185,6 +206,37 @@ async function wordQuiz() {
       input.placeholder = 'translation';
       div.appendChild(input);
     });
+
+    if (json.prev_date) {
+      let prevB = document.createElement('input');
+      prevB.type = 'button';
+      prevB.value = 'Previous';
+      prevB.className = 'cell-input';
+      prevB.style.gridRow = 6;
+      prevB.style.gridColumn = 2;
+      prevB.addEventListener('click', () => {
+        navigate(routes.quiz.pathname + json.prev_date)
+      });
+      div.appendChild(prevB);
+    }
+
+    if (json.next_date) {
+      let nextB = document.createElement('input');
+      nextB.type = 'button';
+      nextB.value = 'Next';
+      nextB.className = 'cell-input';
+      nextB.style.gridRow = 6;
+      nextB.style.gridColumn = 2;
+      nextB.addEventListener('click', () => {
+        navigate(routes.quiz.pathname + json.next_date)
+      });
+      div.appendChild(nextB);
+    }
+
+    if (!date) {
+      url.pathname += json.date;
+      history.replaceState(undefined, 'Word quiz', url.toString())
+    }
 
     contentDiv.appendChild(div);
   }
@@ -206,7 +258,7 @@ async function menu() {
     e.value = text;
     e.addEventListener('click', () => {
       div.remove();
-      navigate(route);
+      navigate(route.pathname);
     });
     return e;
   });
@@ -253,19 +305,29 @@ const routes = {
 }
 
 function findRoute(pathname) {
-  return Object.values(routes).find(route => route.pathname == pathname);
+  let page = pathname.replace(pathMatcher, '');
+  return Object.values(routes).find(route =>
+     route.pathname == page);
 }
 
-async function navigate(route, searchParam) {
-  if (!route)
-    route = routes.menu;
+async function navigate(pathname, {
+  search='',
+  replaceState=false
+} = {}) {
+  let route = pathname && findRoute(pathname);
+  if (!route) {
+    route = routes.menu
+    pathname = routes.menu.pathname;
+  }
   const newUrl = new URL(window.location.href);
-  newUrl.pathname = route.pathname;
-  if (searchParam)
-    newUrl.searchParams.set(...searchParam);
+  newUrl.search = search;
+  newUrl.pathname = pathname;
+  if (replaceState) {
+    history.replaceState(undefined, route.title, newUrl.toString());
+  }
   else
-    newUrl.search = '';;
-  history.pushState(undefined, route.title, newUrl.toString());
+    history.pushState(undefined, route.title, newUrl.toString());
+
   for (child of contentDiv.children)
     if (!(child instanceof HTMLScriptElement))
       child.remove()
@@ -274,10 +336,17 @@ async function navigate(route, searchParam) {
 
 async function app() {
   startup();
-  navigate(routes.login, ['return', window.location.pathname]);
+
   window.onpopstate = () => {
-    navigate(findRoute(window.location.pathname));
+    navigate(window.location.pathname, { replaceState: true });
   };
+
+  const searchParams = new URLSearchParams();
+  searchParams.append('return', window.location.pathname);
+  navigate(routes.login.pathname, {
+    replaceState: true,
+    search: searchParams.toString(),
+  });
 }
 
 app();
