@@ -1,3 +1,4 @@
+var socket;
 var accessToken;
 var contentDiv;
 var logoutButton;
@@ -5,19 +6,17 @@ var logoutButton;
 let pathMatcher = new RegExp('[^/]*$')
 
 function startup() {
-  document.body.style = `
-     background-color: #333333;
-  `;
+  document.body.style.backgroundColor = '#333333';
 
   let classStyles = document.createElement('style');
   classStyles.innerHTML = `
     .cell-input, .cell-quiz, .logout {
       font-size: 3em;
       background-color: inherit;
+      font-family: inherit;
     }
     .cell-quiz {
       margin: 0.2em;
-      font-family: inherit;
     }
     .center-grid, .center-flex {
       position: fixed;
@@ -176,6 +175,21 @@ async function loginPage() {
   contentDiv.appendChild(div);
 };
 
+function openSocket() {
+  if (!socket || [2, 3].includes(socket.readyState)) {
+    console.log('openSocket');
+    let wsUrl = new URL(window.location.href)
+    wsUrl.pathname = '/ws'
+    wsUrl.protocol = 'wss'
+
+    socket = new WebSocket(wsUrl);
+    socket.onopen = function() {
+      socket.send(accessToken);
+    }
+    socket.onclose = openSocket;
+  }
+}
+
 async function wordQuiz() {
   const url = new URL(window.location.href);
   const match = url.pathname.match('[^/]*$');
@@ -186,25 +200,36 @@ async function wordQuiz() {
 
   res = await myFetch('/api/quiz/?' + search.toString());
   if (res.ok) {
+    openSocket();
+
     let json = await res.json()
 
     let div = document.createElement('div');
     div.className = 'center-grid';
 
-    json.word_pairs.forEach((entry, index) => {
+    json.word_pairs.forEach(([lang_b_id, lang_a, input], index) => {
       let span = document.createElement('span');
       span.className = 'cell-quiz';
       span.style.gridRow = index;
       span.style.gridColumn = 1;
-      span.innerHTML = entry[1];
+      span.innerHTML = lang_a;
       div.appendChild(span);
 
-      let input = document.createElement('input');
-      input.style.gridRow = index;
-      input.style.gridColumn = 2;
-      input.className = 'cell-quiz';
-      input.placeholder = 'translation';
-      div.appendChild(input);
+      let inputE = document.createElement('input');
+      inputE.style.gridRow = index;
+      inputE.style.gridColumn = 2;
+      inputE.value = input;
+      inputE.className = 'cell-quiz';
+      inputE.placeholder = 'translation';
+      inputE.addEventListener('input', ev => {
+        socket.send(JSON.stringify({
+          type: 'word-quiz-input',
+          input: ev.target.value,
+          quiz_id: json.quiz_id,
+          lang_b_id: lang_b_id,
+        }));
+      });
+      div.appendChild(inputE);
     });
 
     if (json.prev_date) {
@@ -213,7 +238,9 @@ async function wordQuiz() {
       prevB.value = 'Previous';
       prevB.className = 'cell-input';
       prevB.style.gridRow = 6;
-      prevB.style.gridColumn = 2;
+      prevB.style.gridColumnStart = 1;
+      prevB.style.gridColumnEnd = 3;
+      prevB.style.marginTop = '1em';
       prevB.addEventListener('click', () => {
         navigate(routes.quiz.pathname + json.prev_date)
       });
@@ -225,13 +252,16 @@ async function wordQuiz() {
       nextB.type = 'button';
       nextB.value = 'Next';
       nextB.className = 'cell-input';
-      nextB.style.gridRow = 6;
-      nextB.style.gridColumn = 2;
+      nextB.style.gridRow = 7;
+      nextB.style.gridColumnStart = 1;
+      nextB.style.gridColumnEnd = 3;
+      nextB.style.marginTop = '1em';
       nextB.addEventListener('click', () => {
         navigate(routes.quiz.pathname + json.next_date)
       });
       div.appendChild(nextB);
     }
+
 
     if (!date) {
       url.pathname += json.date;
@@ -278,6 +308,11 @@ async function fetchAccessToken() {
   if (res.ok) {
     if (accessToken == 'logout') {
       accessToken = undefined;
+      if (socket) {
+        socket.onclose = undefined
+        socket.close();
+        socket = null;
+      }
       return false;
     }
 

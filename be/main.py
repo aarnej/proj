@@ -1,3 +1,4 @@
+import uwsgi
 from urllib.parse import parse_qs
 from http.cookies import SimpleCookie
 import psycopg2
@@ -15,7 +16,7 @@ connection = psycopg2.connect(database = "web", port = "5433")
 def access_token(user_id):
     return jwt.encode({
         'user_id': user_id,
-        'exp': datetime.now(timezone.utc) + timedelta(seconds=30),
+        'exp': datetime.now(timezone.utc) + timedelta(minutes=5),
         'aud': 'urn:access',
     }, JWT_SECRET, algorithm='HS256').decode()
 
@@ -48,12 +49,14 @@ def refresh(env, start_response):
     return unauthorized(env, start_response)
 
 
-def parse_access_token(env):
+def access_token_from_env(env):
     try:
-        token = env['HTTP_AUTHORIZATION'].split()[-1]
+        return env['HTTP_AUTHORIZATION'].split()[-1]
     except (IndexError, KeyError):
-        return False
+        return None
 
+
+def decode_access_token(token):
     try:
         payload = jwt.decode(token,
                              JWT_SECRET,
@@ -132,9 +135,9 @@ def quiz(env, start_response, user_id):
                 from quizzes
                 where user_id = %s and extract(epoch from date) >= %s
                 order by date
-                limit 3
+                limit %s
                 ''',
-                (user_id, prev_date or req_date[0])
+                (user_id, prev_date or req_date[0], prev_date and 3 or 2)
             )
 
             quizzes = cursor.fetchmany(3);
@@ -176,8 +179,9 @@ def quiz(env, start_response, user_id):
 
         cursor.execute(
             '''
-            select word_pair_id, lang_a from quiz_words
-            join word_pairs on quiz_words.word_pair_id = word_pairs.id
+            select lang_b.id, lang_a.lang_a, input from quiz_words
+            join lang_b on lang_b.id = quiz_words.lang_b_id
+            join lang_a on lang_a.id = lang_b.lang_a_id
             where quiz_words.quiz_id = %s;
             ''',
             (quiz_id,)
@@ -189,6 +193,7 @@ def quiz(env, start_response, user_id):
     ])
     return [json.dumps({
         'date': date,
+        'quiz_id': quiz_id,
         'prev_date': prev_date,
         'next_date': next_date,
         'word_pairs': word_pairs,
@@ -209,7 +214,33 @@ endpoints = {
     }
 }
 
-def application(env, start_response):
+
+def process_ws(env, start_response):
+    print(env)
+    uwsgi.websocket_handshake(env['HTTP_SEC_WEBSOCKET_KEY'], env.get('HTTP_ORIGIN', ''))
+    access_token = uwsgi.websocket_recv()
+    user_id = decode_access_token(access_token)
+    if not user_id:
+        uwsgi.websocket_send('failed')
+        return
+
+    while True:
+        msg = json.loads(uwsgi.websocket_recv())
+
+        if msg['type'] == 'word-quiz-input':
+            with connection, connection.cursor() as cursor:
+                cursor.execute(
+                    '''
+                    update quiz_words
+                    set input = %s
+                    where quiz_id = %s and lang_b_id = %s and
+                       quiz_id in (select id from quizzes where user_id = %s)
+                    ''',
+                    (msg['input'], msg['quiz_id'], msg['lang_b_id'], user_id)
+                )
+
+
+def process_http(env, start_response):
     try:
         endpoint = endpoints.get(env['PATH_INFO'], {
             'handler': unknown,
@@ -218,7 +249,8 @@ def application(env, start_response):
         if not endpoint.get('check_auth', True):
             return endpoint['handler'](env, start_response)
 
-        user_id = parse_access_token(env)
+
+        user_id = decode_access_token(access_token_from_env(env))
         if not user_id:
             return unauthorized(env, start_response)
 
@@ -229,3 +261,10 @@ def application(env, start_response):
         raise
         start_response('500 Internal Server Error', [])
         return []
+
+
+def application(env, start_response):
+    if env.get('HTTP_SEC_WEBSOCKET_KEY'):
+        return process_ws(env, start_response)
+    else:
+        return process_http(env, start_response)
