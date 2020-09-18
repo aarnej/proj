@@ -107,6 +107,44 @@ def unauthorized(env, start_response):
     return []
 
 
+def words(env, start_response, user_id):
+    qs = parse_qs(env.get('QUERY_STRING'))
+    offset = int(qs.get('offset', [0])[0])
+    limit = int(qs.get('limit', [7])[0])
+
+    with connection, connection.cursor() as cursor:
+        cursor.execute(
+            '''
+            select lang_a, lang_b, lang_b.id
+            from lang_a
+            join lang_b on lang_b.lang_a_id = lang_a.id
+            order by lang_a
+            offset %s
+            limit %s
+            ''',
+            (offset, limit),
+        )
+        words = cursor.fetchmany(limit)
+        cursor.execute(
+            '''
+            select count(id)
+            from lang_a
+            ''',
+            (offset, limit),
+        )
+        count = cursor.fetchone()[0]
+
+    start_response('200 OK', [
+        ('Content-Type', 'application/json'),
+    ])
+    return [json.dumps({
+        'count': count,
+        'offset': offset,
+        'limit': limit,
+        'words': words,
+    }).encode()]
+
+
 def quiz(env, start_response, user_id):
     req_date = parse_qs(env.get('QUERY_STRING')).get('date')
 
@@ -200,6 +238,30 @@ def quiz(env, start_response, user_id):
     }).encode()]
 
 
+def quiz_input(msg):
+    with connection, connection.cursor() as cursor:
+        cursor.execute(
+            '''
+            update quiz_words
+            set input = %s
+            where quiz_id = %s and lang_b_id = %s and
+               quiz_id in (select id from quizzes where user_id = %s)
+            ''',
+            (msg['input'], msg['quiz_id'], msg['lang_b_id'], user_id)
+        )
+
+def edit_word(msg):
+    with connection, connection.cursor() as cursor:
+        cursor.execute(
+            '''
+            update lang_b
+            set lang_b = %s
+            where id = %s
+            ''',
+            (msg['lang_b'], msg['lang_b_id'])
+        )
+
+
 endpoints = {
     '/login/': {
         'handler': login,
@@ -211,9 +273,21 @@ endpoints = {
     },
     '/quiz/': {
         'handler': quiz,
-    }
+    },
+    '/words/': {
+        'handler': words,
+    },
 }
 
+
+messages = {
+    'word-quiz-input': {
+        'handler': quiz_input,
+    },
+    'edit-word': {
+        'handler': edit_word,
+    },
+}
 
 def process_ws(env, start_response):
     print(env)
@@ -226,18 +300,7 @@ def process_ws(env, start_response):
 
     while True:
         msg = json.loads(uwsgi.websocket_recv())
-
-        if msg['type'] == 'word-quiz-input':
-            with connection, connection.cursor() as cursor:
-                cursor.execute(
-                    '''
-                    update quiz_words
-                    set input = %s
-                    where quiz_id = %s and lang_b_id = %s and
-                       quiz_id in (select id from quizzes where user_id = %s)
-                    ''',
-                    (msg['input'], msg['quiz_id'], msg['lang_b_id'], user_id)
-                )
+        messages[msg['type']]['handler'](msg)
 
 
 def process_http(env, start_response):
